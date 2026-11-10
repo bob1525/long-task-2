@@ -92,9 +92,12 @@ def apply_corrections(raw: float, empty: int, m: int) -> tuple[float, str]:
     # correction whenever E ≤ 2^32/30, which includes every small E. Section 4
     # (ii) says that correction is part of the program and is exactly what
     # stops n = 0 from being reported as α_m m. The three braces are therefore
-    # three mutually exclusive ranges. The small-range comparison itself still
-    # follows the prose, which describes the distortion for n < (5/2) m.
-    if raw < small_limit:
+    # three mutually exclusive ranges.
+    #
+    # The prose says the asymptotic regime is reached at n = (5/2) m and that
+    # distortions appear for n < (5/2) m. The program itself compares with
+    # ``E ≤ (5/2) m``, so the endpoint stays on the linear-counting side.
+    if raw <= small_limit:
         if empty != 0:
             # Section 4 (ii): μ = ln(m/V), hence n ≈ m ln(m/V).
             value = m * math.log(m / empty)
