@@ -93,6 +93,7 @@ class Cluster:
         self._rpc_seq = 0
         self._rpcs: dict[int, object] = {}
         self._op_seq = 0
+        self._session_seq = 0
         skews = self.config.clock_skews or [0] * self.config.n
         nodes: list = []
         for node_id in range(self.config.n):
@@ -241,6 +242,14 @@ class Client:
     timeout: int | None = None
     seq: int = 0
     leader_hint: int = 0
+    session: int = 0
+
+    def __post_init__(self) -> None:
+        # Each handle is its own session. Reusing a display name must not
+        # reuse Raft request ids or the linearizability checker's program order.
+        if self.session == 0:
+            self.cluster._session_seq += 1
+            self.session = self.cluster._session_seq
 
     def put(
         self,
@@ -323,7 +332,7 @@ class Client:
         sim = self.cluster.sim
         start = sim.time
         deadline = start + self._limit(timeout)
-        req_id = f"{self.client_id}:{self.seq}:{kind}:{key}"
+        req_id = f"s{self.session}:{self.seq}:{kind}:{key}"
         ambiguous = False
         status = "unavailable"
         result_value: str | None = None
@@ -378,7 +387,7 @@ class Client:
         self.cluster.history.add(
             OpRecord(
                 op_id=self.cluster.next_op_id(),
-                client_id=self.client_id,
+                client_id=f"{self.client_id}#{self.session}",
                 client_seq=self.seq,
                 kind=kind,
                 key=key,

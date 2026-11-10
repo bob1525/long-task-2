@@ -109,6 +109,41 @@ class RaftTest(unittest.TestCase):
         self.assertEqual(cluster.nodes[follower].kv.get("k"), "next")
         self.assertTrue(cluster.verify().passed, cluster.verify())
 
+    def test_two_handles_with_the_same_client_name_do_not_collapse_writes(self) -> None:
+        cluster = support.raft(3, seed=1)
+        first = cluster.client("c")
+        second = cluster.client("c")
+        self.assertTrue(first.put("k", "v1").ok)
+        second_put = second.put("k", "v2")
+        self.assertTrue(second_put.ok, second_put)
+        got = cluster.client("reader").get("k")
+        self.assertEqual(got.value, "v2", cluster.debug_state())
+        result = cluster.verify()
+        self.assertTrue(result.passed, f"{result}\n{cluster.debug_state()}")
+
+    def test_retry_of_the_same_request_id_does_not_append_twice(self) -> None:
+        cluster = support.raft(1, seed=1)
+        client = cluster.client("c")
+        self.assertTrue(client.put("k", "once").ok)
+        leader = cluster.nodes[0]
+        req_id = next(entry.req_id for entry in leader.log if entry.req_id)
+        done: dict = {}
+        rpc = cluster.new_rpc(lambda result: done.setdefault("r", result))
+        leader.receive(
+            {
+                "type": "ClientPut",
+                "rpc_id": rpc,
+                "req_id": req_id,
+                "client_id": "c",
+                "key": "k",
+                "value": "twice",
+            }
+        )
+        self.assertEqual(done["r"]["status"], "ok")
+        self.assertEqual(done["r"]["value"], "once")
+        self.assertEqual(sum(1 for entry in leader.log if entry.key == "k"), 1)
+        self.assertEqual(client.get("k").value, "once")
+
     def test_same_request_is_not_applied_twice(self) -> None:
         cluster = support.raft(3, seed=7)
         client = cluster.client("c")
