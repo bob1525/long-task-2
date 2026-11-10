@@ -1,10 +1,12 @@
 import math
+import random
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from hll.hyperloglog import HyperLogLog
 from hll.analysis import (
     PUBLISHED_BETA,
     alpha_from_integral,
@@ -76,6 +78,23 @@ class ErrorMeasurementTests(unittest.TestCase):
         self.assertGreater(ratio, 1.4)
         self.assertLess(ratio, 2.8)
         self.assertAlmostEqual(math.sqrt(1024 / 256), 2.0)
+
+    def test_estimates_stay_sane_across_the_small_range_boundary(self):
+        # m = 256, so (5/2)m = 640. The program switches on the raw estimate,
+        # and both sides of that switch should stay near the stated error
+        # rather than falling back to the uncorrected α_m m bias.
+        precision = 8
+        for cardinality in (400, 640, 800):
+            errors = []
+            for trial in range(20):
+                rng = random.Random(1000 * cardinality + trial)
+                sketch = HyperLogLog(precision)
+                for _ in range(cardinality):
+                    sketch.add_hash(rng.getrandbits(32))
+                errors.append((sketch.count() - cardinality) / cardinality)
+            mean = sum(errors) / len(errors)
+            self.assertLess(abs(mean), 0.05)
+            self.assertLess(max(abs(error) for error in errors), 0.30)
 
 
 if __name__ == "__main__":

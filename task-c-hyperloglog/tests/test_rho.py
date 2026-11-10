@@ -58,6 +58,17 @@ class RhoTests(unittest.TestCase):
         observe(registers, low, 4)
         self.assertEqual(registers[2], 4)
 
+    def test_widest_program_register_matches_section4(self):
+        # b = 16 is the top of Figure 3's range. Section 4 says a register then
+        # lies in 0 .. L + 1 - log2(m) = 33 - 16 = 17, and ρ(0^16) = 17.
+        index, rest, width = split_hash(0xFFFF0000, 16)
+        self.assertEqual((index, rest, width), (65535, 0, 16))
+        self.assertEqual(rho(rest, width), 17)
+        sketch = HyperLogLog(16)
+        sketch.add_hash(0xFFFF0000)
+        self.assertEqual(sketch.registers[-1], 17)
+        self.assertEqual(sum(rank > 0 for rank in sketch.registers), 1)
+
     def test_precision_outside_the_program_is_rejected(self):
         with self.assertRaises(ValueError):
             split_hash(0, 3)
