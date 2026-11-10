@@ -87,22 +87,25 @@ def apply_corrections(raw: float, empty: int, m: int) -> tuple[float, str]:
 
     small_limit = 2.5 * m  # (5/2) m
     large_limit = HASH_SPACE / 30.0  # (1/30) * 2^32
-    value = raw
-    regime = "intermediate"
-    # Literal order of the three ``if`` statements in Figure 3. The threshold
-    # follows the prose in Section 4 (ii), which describes distortion for n < 5m/2.
+    # The figure prints three separate ``if`` statements. Read as fall-through,
+    # the intermediate assignment ``E* := E`` overwrites the small-range
+    # correction whenever E ≤ 2^32/30, which includes every small E. Section 4
+    # (ii) says that correction is part of the program and is exactly what
+    # stops n = 0 from being reported as α_m m. The three braces are therefore
+    # three mutually exclusive ranges. The small-range comparison itself still
+    # follows the prose, which describes the distortion for n < (5/2) m.
     if raw < small_limit:
         if empty != 0:
+            # Section 4 (ii): μ = ln(m/V), hence n ≈ m ln(m/V).
             value = m * math.log(m / empty)
         else:
             value = raw
         regime = "small"
-    if raw <= large_limit:
+    elif raw <= large_limit:
         value = raw
         regime = "intermediate"
-    if raw > large_limit:
+    else:
         ratio = raw / HASH_SPACE
-        # Collision inversion printed in Figure 3.
         value = -HASH_SPACE * math.log2(1.0 - ratio)
         regime = "large"
     return value, regime
