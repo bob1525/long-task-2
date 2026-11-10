@@ -67,10 +67,5 @@ test("&& desugars to if before ANF, and both branches are atoms", () => {
 });
 
 test("a user binding named t1 does not collide with a fresh temporary", () => {
-  const ir = raw("let t1 = 1\nlet main = t1 + 2");
-  assert.match(ir, /let t1 = 1 in/);
-  assert.match(ir, /\(t1 \+ 2\)|\(t1_2 \+ 2\)|\(t2 \+ t1\)/);
-  const names = [...ir.matchAll(/\b(t1(?:_2)?|t2)\b/g)].map((m) => m[1]);
-  assert.equal(new Set(names).size, names.length > 0 ? new Set(names).size : 0);
-  assert.ok(new Set(names).size >= 2, ir);
+  assert.equal(raw("let t1 = 1\nlet main = t1 + 2"), "let t1 = 1 in\nlet t2 = (t1 + 2) in\nt2");
 });

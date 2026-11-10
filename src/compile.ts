@@ -105,6 +105,8 @@ export function flagsFromArgs(args: string[]): OptFlags {
         throw new CompileError("--opt requires a value (all, none, or a comma-separated list)", undefined, "<cli>", "compile");
       }
       applyOptList(opts, value);
+    } else if (arg.startsWith("-")) {
+      throw new CompileError(`unknown option '${arg}'`, undefined, "<cli>", "compile");
     }
   }
   return opts;

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -84,9 +86,9 @@ test("a non-exhaustive match fails at run time", () => {
 });
 
 test("shadowing and closure capture agree with and without optimization", () => {
-  agree("let x = 1 in let x = x + 2 in x\nlet main = x", "3");
-  agree("let n = 1\nlet f x = n + x\nlet n2 = 10\nlet main = f 1", "2");
-  agree("let x = 1\nlet f y = x + y\nlet main = f 2", "3");
+  agree("let main = let x = 1 in let x = x + 2 in x", "3");
+  agree("let main = let n = 1 in let f = fun x -> n + x in let n = 10 in f 1", "2");
+  agree("let main = let x = 1 in let f = fun y -> x + y in f 2", "3");
 });
 
 function funcc(args: string[]): { status: number | null; stdout: string; stderr: string } {
@@ -139,6 +141,11 @@ test("unknown options and extra file arguments are rejected", () => {
   assert.notEqual(extra.status, 0);
   assert.match(extra.stderr, /unexpected extra argument/);
   assert.equal(extra.stdout.trim(), "");
+
+  const outFlag = funcc(["run", file, "-o", path.join(root, "examples", "ignored.js")]);
+  assert.notEqual(outFlag.status, 0);
+  assert.match(outFlag.stderr, /-o is only valid with compile/);
+  assert.equal(outFlag.stdout.trim(), "");
 });
 
 test("a missing input file is reported as a compiler error", () => {
@@ -150,11 +157,15 @@ test("a missing input file is reported as a compiler error", () => {
 });
 
 test("compile -o writes JavaScript that node can run", () => {
-  const out = path.join(root, "examples", ".pattern_match.out.js");
-  const compiled = funcc(["compile", path.join(root, "examples", "pattern_match.fun"), "-o", out]);
-  assert.equal(compiled.status, 0, compiled.stderr);
-  const ran = spawnSync(process.execPath, [out], { encoding: "utf8" });
-  assert.equal(ran.status, 0);
-  assert.equal((ran.stdout ?? "").trim(), "12");
-  spawnSync("rm", ["-f", out]);
+  const dir = mkdtempSync(path.join(tmpdir(), "funcc-out-"));
+  const out = path.join(dir, "pattern_match.js");
+  try {
+    const compiled = funcc(["compile", path.join(root, "examples", "pattern_match.fun"), "-o", out]);
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const ran = spawnSync(process.execPath, [out], { encoding: "utf8" });
+    assert.equal(ran.status, 0);
+    assert.equal((ran.stdout ?? "").trim(), "12");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

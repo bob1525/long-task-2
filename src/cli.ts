@@ -11,6 +11,10 @@
  *   --dce        / --no-dce
  *   --inline     / --no-inline
  *   --opt all | none | const-fold,dce,inline
+ *
+ * Unknown options, extra file arguments, and `-o` on a command other than
+ * `compile` are errors. A missing file is reported as a compiler error
+ * instead of a raw runtime exception.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -21,6 +25,7 @@ import { ppAnf } from "./ir.js";
 interface ParsedArgs {
   command: string;
   file: string | undefined;
+  extra: string[];
   out: string | undefined;
   optArgs: string[];
 }
@@ -66,7 +71,7 @@ function parseCli(argv: string[]): ParsedArgs {
       positional.push(arg);
     }
   }
-  return { command, file: positional[0], out, optArgs };
+  return { command, file: positional[0], extra: positional.slice(1), out, optArgs };
 }
 
 function main(argv: string[]): void {
@@ -78,10 +83,16 @@ function main(argv: string[]): void {
   if (!parsed.file) {
     throw new CompileError("missing input file", undefined, "<cli>", "compile");
   }
+  if (parsed.extra.length > 0) {
+    throw new CompileError(`unexpected extra argument '${parsed.extra[0]}'`, undefined, "<cli>", "compile");
+  }
   if (!["run", "compile", "ir", "check"].includes(parsed.command)) {
     throw new CompileError(`unknown command '${parsed.command}'`, undefined, "<cli>", "compile");
   }
-  const source = readFileSync(parsed.file, "utf8");
+  if (parsed.out && parsed.command !== "compile") {
+    throw new CompileError("-o is only valid with compile", undefined, "<cli>", "compile");
+  }
+  const source = readSource(parsed.file);
   const flags = flagsFromArgs(parsed.optArgs);
   if (parsed.command === "check") {
     const checked = compileSource(source, parsed.file, flags).checked;
@@ -119,6 +130,15 @@ try {
     const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(`${message}\n`);
     process.exitCode = 1;
+  }
+}
+
+function readSource(filename: string): string {
+  try {
+    return readFileSync(filename, "utf8");
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err ? String(err.code) : "error";
+    throw new CompileError(`cannot read '${filename}' (${code})`, undefined, "<cli>", "compile");
   }
 }
 
