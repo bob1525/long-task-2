@@ -105,8 +105,12 @@ def apply_corrections(raw: float, empty: int, m: int) -> tuple[float, str]:
         value = raw
         regime = "intermediate"
     else:
+        # Section 4 (iii): E estimates the number of distinct hashes, about
+        # 2^L (1 - e^{-n/2^L}). Inverting that exponential uses the natural
+        # logarithm, the same ``log`` as the rest of the paper. log2 would
+        # scale the cardinality by 1/ln 2.
         ratio = raw / HASH_SPACE
-        value = -HASH_SPACE * math.log2(1.0 - ratio)
+        value = -HASH_SPACE * math.log(1.0 - ratio)
         regime = "large"
     return value, regime
 
