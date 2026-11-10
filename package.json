@@ -1,0 +1,20 @@
+{
+  "name": "fun-compiler",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fun: a small functional language with Hindley-Milner inference, ANF, and switchable optimizations",
+  "scripts": {
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "funcc": "tsx src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
