@@ -184,11 +184,13 @@ class EventualNode:
         if state is None or state["gen"] != gen:
             return
         self.pending_gets.pop(token, None)
+        key = state["key"]
+        # A replicate may have landed after the read snapshotted the local value.
+        state["responses"][self.id] = self.store.get(key)
         best: Version | None = None
         for version in state["responses"].values():
             if version is not None and (best is None or version.order() > best.order()):
                 best = version
-        key = state["key"]
         if best is not None:
             self._ingest(key, best, "read-repair")
             encoded = _version_dict(best)

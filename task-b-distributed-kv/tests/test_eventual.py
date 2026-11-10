@@ -40,6 +40,44 @@ class EventualTest(unittest.TestCase):
         result = cluster.verify(durable=True)
         self.assertTrue(result.passed, f"{result}\n{cluster.debug_state()}")
 
+    def test_read_observes_a_version_installed_while_it_waits(self) -> None:
+        # The only probe target is empty, and its probe is dropped. A replicate
+        # from the writer still lands in the local store before the read returns.
+        cluster = support.eventual(
+            3,
+            seed=1,
+            anti_entropy=False,
+            eager_replicate=False,
+            read_fanout=1,
+            read_wait=40,
+            delay_max=3,
+        )
+        self.assertTrue(cluster.client("w").put("k", "pushed", contact=2).ok)
+        self.assertIsNone(cluster.nodes[1].store.get("k"))
+        cluster.nodes[1].peers = [0]
+        cluster.net.filter = lambda _src, _dst, msg: msg.get("type") == "read_probe"
+
+        def push() -> None:
+            version = cluster.nodes[2].store["k"]
+            cluster.nodes[2].emit(
+                1,
+                {
+                    "type": "replicate",
+                    "key": "k",
+                    "version": {
+                        "value": version.value,
+                        "wall": version.wall,
+                        "logical": version.logical,
+                        "writer": version.writer,
+                    },
+                },
+            )
+
+        cluster.sim.schedule(1, push)
+        got = cluster.client("c").get("k", contact=1)
+        self.assertEqual(cluster.nodes[1].store["k"].value, "pushed")
+        self.assertEqual(got.value, "pushed", cluster.debug_state())
+
     def test_read_repair_without_anti_entropy(self) -> None:
         cluster = support.eventual(
             3,
