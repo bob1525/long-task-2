@@ -51,7 +51,10 @@ class Network:
         return self.group_of.get(src, 10_000 + src) == self.group_of.get(dst, 10_000 + dst)
 
     def send(self, src: int, dst: int, msg: dict) -> None:
-        if self._drop(src, dst, msg):
+        # Loss is rolled once, at send. Partition and the test filter are
+        # checked again at delivery so a cut that appears while the message
+        # is in flight still drops it, without a second independent loss roll.
+        if self._blocked(src, dst, msg) or self._lost():
             self.dropped += 1
             trace(self.sim.time, f"drop {src}->{dst} {msg.get('type')}")
             return
@@ -62,7 +65,7 @@ class Network:
         payload = msg
 
         def deliver() -> None:
-            if self._drop(src, dst, payload):
+            if self._blocked(src, dst, payload):
                 self.dropped += 1
                 trace(self.sim.time, f"drop-in-flight {src}->{dst} {payload.get('type')}")
                 return
@@ -74,11 +77,12 @@ class Network:
 
         self.sim.schedule(delay, deliver, label=str(msg.get("type")))
 
-    def _drop(self, src: int, dst: int, msg: dict) -> bool:
+    def _blocked(self, src: int, dst: int, msg: dict) -> bool:
         if not self.can_reach(src, dst):
             return True
         if self.filter is not None and self.filter(src, dst, msg):
             return True
-        if self.drop_prob > 0.0 and self.sim.rng.random() < self.drop_prob:
-            return True
         return False
+
+    def _lost(self) -> bool:
+        return self.drop_prob > 0.0 and self.sim.rng.random() < self.drop_prob

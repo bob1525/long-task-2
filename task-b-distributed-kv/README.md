@@ -9,7 +9,7 @@
 | 模块 | 职责 |
 | --- | --- |
 | `kvsim/sim.py` | 事件队列、HLC |
-| `kvsim/network.py` | 延迟、按概率丢包、分区、测试用过滤器 |
+| `kvsim/network.py` | 延迟、发送时按概率丢一次包、分区（在途消息也会丢）、测试用过滤器 |
 | `kvsim/cluster.py` | 节点配置、客户端、崩溃/恢复、调用检查器 |
 | `kvsim/eventual.py` | 最终一致的 LWW 寄存器 |
 | `kvsim/raft.py` | Raft 复制和 read-index 读 |
@@ -99,3 +99,5 @@ python3 -m kvsim faults --seed 2
 ```
 
 报告列是 `seed / model / nodes / drop / ops / PASS|FAIL`，最后一行是 `total/passed/failed`。任一场景失败时进程退出码为 1。
+
+自检记录在 [`CONSISTENCY_LOG.md`](CONSISTENCY_LOG.md)。
