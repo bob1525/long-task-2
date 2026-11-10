@@ -11,7 +11,7 @@ from __future__ import annotations
 import unittest
 
 import support
-from kvsim.checker import check_linearizability, check_raft_safety
+from kvsim.checker import check_convergence, check_linearizability, check_raft_safety
 
 
 def check(rows):
@@ -284,6 +284,22 @@ class LinearizabilityCheckerTest(unittest.TestCase):
         ]
         result = check_raft_safety(snapshot)
         self.assertTrue(result.passed, result)
+
+
+class ConvergenceCheckerTest(unittest.TestCase):
+    def test_same_order_conflicting_values_are_a_conflict(self) -> None:
+        created = {("k", 1, 0, 0, "a"), ("k", 1, 0, 0, "b")}
+        # Both replicas agree. The stamp (wall, logical, writer) is identical
+        # and the values are not, so agreement on either value is still a conflict.
+        for value in ("a", "b"):
+            stores = [
+                (0, {"k": (1, 0, 0, value)}),
+                (1, {"k": (1, 0, 0, value)}),
+            ]
+            for durable in (False, True):
+                result = check_convergence(stores, created, durable=durable)
+                self.assertFalse(result.passed, result)
+                self.assertTrue(any("conflict" in item for item in result.violations), result)
 
 
 if __name__ == "__main__":

@@ -269,6 +269,19 @@ def check_convergence(
     for key, wall, logical, writer, value in created:
         by_key.setdefault(key, []).append((wall, logical, writer, value))
 
+    colliding: set[str] = set()
+    for key, versions in by_key.items():
+        by_stamp: dict[tuple[int, int, int], set[str]] = {}
+        for wall, logical, writer, value in versions:
+            by_stamp.setdefault((wall, logical, writer), set()).add(value)
+        for stamp, values in by_stamp.items():
+            if len(values) > 1:
+                colliding.add(key)
+                shown = ", ".join(repr(item) for item in sorted(values))
+                violations.append(
+                    f"key {key!r} has conflicting values {shown} for the same version stamp {stamp}"
+                )
+
     for node_id, store in stores:
         for key, version in store.items():
             wall, logical, writer, value = version
@@ -289,6 +302,8 @@ def check_convergence(
 
     if durable:
         for key, versions in sorted(by_key.items()):
+            if key in colliding:
+                continue
             want = max(versions, key=lambda item: (item[0], item[1], item[2]))
             for node_id, store in stores:
                 have = store.get(key)
