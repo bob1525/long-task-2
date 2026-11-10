@@ -2,6 +2,8 @@
 
 Fun is a small functional language. This repository is its compiler: a hand-written lexer and parser, Hindley-Milner inference, an ANF intermediate language, four switchable optimizations, and a JavaScript backend. The compiler does not use a parser generator or an existing compiler framework.
 
+Task B, a distributed key-value simulator with two consistency models and automated consistency checking, is in [`task-b-distributed-kv/`](task-b-distributed-kv/) and does not modify the compiler.
+
 ## Build
 
 Requires Node.js 22 or newer.
