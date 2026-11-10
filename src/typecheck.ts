@@ -258,12 +258,15 @@ class Checker {
     if (e.rec) {
       const recVar = this.freshVar(e.name);
       rhs = this.infer(e.value, env.extend(e.name, recVar), bindings, false);
-      this.unify(recVar, rhs, e.span);
+      // The occurs check fires while unifying the recursive assumption with
+      // the inferred function type. Point at the body (the recursive use),
+      // not at the `let` keyword.
+      this.unify(recVar, rhs, innermost(e.value).span);
     } else {
       rhs = this.infer(e.value, env, bindings, false);
     }
     this.currentLevel -= 1;
-    const scheme = e.ann ? this.checkAnnotation(rhs, e.ann, e.span) : this.generalize(rhs);
+    const scheme = e.ann ? this.checkAnnotation(rhs, e.ann, e.ann.span) : this.generalize(rhs);
     const recorded: Binding = { name: e.name, scheme, topLevel, span: e.span };
     bindings.push(recorded);
     return this.infer(e.body, env.extend(e.name, scheme), bindings, topLevel);
@@ -703,6 +706,12 @@ class Checker {
     const text = go(t, false);
     return generics.length === 0 ? text : `∀${generics.join(" ")}. ${text}`;
   }
+}
+
+function innermost(e: Expr): Expr {
+  let cur = e;
+  while (cur.tag === "fun") cur = cur.body;
+  return cur;
 }
 
 function prune(t: Type): Type {
