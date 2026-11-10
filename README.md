@@ -4,6 +4,8 @@ Fun is a small functional language. This repository is its compiler: a hand-writ
 
 Task B, a distributed key-value simulator with two consistency models and automated consistency checking, is in [`task-b-distributed-kv/`](task-b-distributed-kv/) and does not modify the compiler.
 
+Task C implements the HyperLogLog cardinality estimator from Flajolet, Fusy, Gandouet, and Meunier (2007) in [`task-c-hyperloglog/`](task-c-hyperloglog/); it does not modify the compiler or Task B.
+
 ## Build
 
 Requires Node.js 22 or newer.
