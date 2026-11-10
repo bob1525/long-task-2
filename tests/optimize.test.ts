@@ -3,10 +3,10 @@ import { test } from "node:test";
 import { compileSource, type OptFlags } from "../src/compile.js";
 import { ppAnf } from "../src/ir.js";
 
-const none: OptFlags = { constFold: false, dce: false, inline: false };
-const onlyInline: OptFlags = { constFold: false, dce: false, inline: true };
-const onlyFold: OptFlags = { constFold: true, dce: false, inline: false };
-const onlyDce: OptFlags = { constFold: false, dce: true, inline: false };
+const none: OptFlags = { constFold: false, dce: false, inline: false, tco: false };
+const onlyInline: OptFlags = { constFold: false, dce: false, inline: true, tco: false };
+const onlyFold: OptFlags = { constFold: true, dce: false, inline: false, tco: false };
+const onlyDce: OptFlags = { constFold: false, dce: true, inline: false, tco: false };
 
 function ir(src: string, flags: OptFlags): string {
   return ppAnf(compileSource(src, "t.fun", flags).ir);
@@ -20,7 +20,7 @@ test("constant folding rewrites arithmetic and leaves the dead lets for DCE", ()
   assert.equal(ir(arith, none), arithRaw);
   assert.equal(ir(arith, onlyFold), arithFolded);
   assert.notEqual(ir(arith, none), ir(arith, onlyFold));
-  assert.equal(ir(arith, { constFold: true, dce: true, inline: false }), "7");
+  assert.equal(ir(arith, { constFold: true, dce: true, inline: false, tco: false }), "7");
 });
 
 test("constant folding does not fold division by zero", () => {
@@ -28,7 +28,7 @@ test("constant folding does not fold division by zero", () => {
   const kept = "let t1 = (1 / 0) in\nt1";
   assert.equal(ir(src, none), kept);
   assert.equal(ir(src, onlyFold), kept);
-  assert.equal(ir(src, { constFold: true, dce: true, inline: true }), kept);
+  assert.equal(ir(src, { constFold: true, dce: true, inline: true, tco: true }), kept);
 });
 
 test("constant folding of a constant if keeps only the taken branch", () => {
@@ -108,8 +108,8 @@ test("dead code elimination keeps an unused call that may diverge", () => {
 });
 
 test("the full pipeline folds, inlines, then deletes the leftovers", () => {
-  assert.equal(ir(arith, { constFold: true, dce: true, inline: true }), "7");
-  assert.equal(ir(inc, { constFold: true, dce: true, inline: true }), "11");
-  assert.equal(ir(unused, { constFold: true, dce: true, inline: true }), "3");
-  assert.equal(ir("let main = if false then 1 else 2 + 3", { constFold: true, dce: true, inline: true }), "5");
+  assert.equal(ir(arith, { constFold: true, dce: true, inline: true, tco: true }), "7");
+  assert.equal(ir(inc, { constFold: true, dce: true, inline: true, tco: true }), "11");
+  assert.equal(ir(unused, { constFold: true, dce: true, inline: true, tco: true }), "3");
+  assert.equal(ir("let main = if false then 1 else 2 + 3", { constFold: true, dce: true, inline: true, tco: true }), "5");
 });

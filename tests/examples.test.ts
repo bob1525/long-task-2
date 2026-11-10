@@ -10,11 +10,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const examples = ["factorial", "list_map", "pattern_match", "compose"] as const;
 
 const sets: Array<[string, OptFlags]> = [
-  ["all", { constFold: true, dce: true, inline: true }],
-  ["none", { constFold: false, dce: false, inline: false }],
-  ["const-fold", { constFold: true, dce: false, inline: false }],
-  ["dce", { constFold: false, dce: true, inline: false }],
-  ["inline", { constFold: false, dce: false, inline: true }],
+  ["all", { constFold: true, dce: true, inline: true, tco: true }],
+  ["none", { constFold: false, dce: false, inline: false, tco: false }],
+  ["const-fold", { constFold: true, dce: false, inline: false, tco: false }],
+  ["dce", { constFold: false, dce: true, inline: false, tco: false }],
+  ["inline", { constFold: false, dce: false, inline: true, tco: false }],
+  ["tco", { constFold: false, dce: false, inline: false, tco: true }],
 ];
 
 for (const name of examples) {

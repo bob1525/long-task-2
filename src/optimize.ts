@@ -2,9 +2,10 @@
  * Switchable optimization passes over ANF.
  *
  * Order when every pass is enabled:
- *   1. inline    — expose the body of a function at its single call site
+ *   1. inline     — expose the body of a function at its single call site
  *   2. const-fold — fold primitives and constant `if`s, and propagate literals
- *   3. dce       — drop pure bindings that the previous passes made unused
+ *   3. tco        — rewrite saturated self tail calls into jumps
+ *   4. dce        — drop pure bindings that the previous passes made unused
  *
  * Each pass is semantics-preserving on its own, which is why tests can run
  * them independently and why `run --opt none` must print the same value as
@@ -35,10 +36,11 @@ export interface OptFlags {
   constFold: boolean;
   dce: boolean;
   inline: boolean;
+  tco: boolean;
 }
 
-export const ALL_OPTS: OptFlags = { constFold: true, dce: true, inline: true };
-export const NO_OPTS: OptFlags = { constFold: false, dce: false, inline: false };
+export const ALL_OPTS: OptFlags = { constFold: true, dce: true, inline: true, tco: true };
+export const NO_OPTS: OptFlags = { constFold: false, dce: false, inline: false, tco: false };
 
 /** Bodies larger than this stay out of line, so a single use cannot blow up the IR. */
 const INLINE_LET_LIMIT = 25;
@@ -49,6 +51,7 @@ export function optimize(expr: AnfExpr, flags: OptFlags): AnfExpr {
   let cur = expr;
   if (flags.inline) cur = inlinePass(cur);
   if (flags.constFold) cur = constFold(cur);
+  if (flags.tco) cur = tailCallPass(cur);
   if (flags.dce) cur = deadCodeElim(cur);
   return cur;
 }
@@ -68,9 +71,12 @@ export function deadCodeElim(expr: AnfExpr): AnfExpr {
 function inlineExpr(e: AnfExpr): AnfExpr {
   switch (e.tag) {
     case "halt":
+    case "jump":
       return e;
     case "letrec":
       return { tag: "letrec", name: e.name, param: e.param, body: inlineExpr(e.body), cont: inlineExpr(e.cont) };
+    case "loop":
+      return { tag: "loop", name: e.name, params: e.params, body: inlineExpr(e.body), cont: inlineExpr(e.cont) };
     case "let": {
       const value = inlineCExp(e.value);
       const body = inlineExpr(e.body);
@@ -98,7 +104,12 @@ function inlineCExp(c: CExp): CExp {
     case "if":
       return { tag: "if", cond: c.cond, then: inlineExpr(c.then), else: inlineExpr(c.else) };
     case "match":
-      return { tag: "match", scrut: c.scrut, arms: c.arms.map((arm) => ({ pattern: arm.pattern, body: inlineExpr(arm.body) })) };
+      return {
+        tag: "match",
+        scrut: c.scrut,
+        span: c.span,
+        arms: c.arms.map((arm) => ({ pattern: arm.pattern, body: inlineExpr(arm.body) })),
+      };
     default:
       return c;
   }
@@ -114,8 +125,11 @@ function inlineAt(e: AnfExpr, fname: string, param: string, fnBody: AnfExpr): An
     if (found) return expr;
     switch (expr.tag) {
       case "halt":
+      case "jump":
         return expr;
       case "letrec":
+        return { ...expr, body: go(expr.body), cont: go(expr.cont) };
+      case "loop":
         return { ...expr, body: go(expr.body), cont: go(expr.cont) };
       case "let": {
         if (
@@ -158,11 +172,21 @@ function foldExpr(e: AnfExpr, env: Map<string, ConstVal>): AnfExpr {
   switch (e.tag) {
     case "halt":
       return { tag: "halt", atom: resolveAtom(e.atom, env) };
+    case "jump":
+      return { tag: "jump", args: e.args.map((a) => resolveAtom(a, env)) };
     case "letrec":
       return {
         tag: "letrec",
         name: e.name,
         param: e.param,
+        body: foldExpr(e.body, env),
+        cont: foldExpr(e.cont, env),
+      };
+    case "loop":
+      return {
+        tag: "loop",
+        name: e.name,
+        params: e.params,
         body: foldExpr(e.body, env),
         cont: foldExpr(e.cont, env),
       };
@@ -206,7 +230,7 @@ function foldCExp(c: CExp, env: Map<string, ConstVal>): CExp {
         const result = evalPrim(c.op, consts);
         if (result) return { tag: "atom", atom: constToAtom(result) };
       }
-      return { tag: "prim", op: c.op, args };
+      return { tag: "prim", op: c.op, args, span: c.span };
     }
     case "app":
       return { tag: "app", fn: resolveAtom(c.fn, env), arg: resolveAtom(c.arg, env) };
@@ -225,6 +249,7 @@ function foldCExp(c: CExp, env: Map<string, ConstVal>): CExp {
       return {
         tag: "match",
         scrut: resolveAtom(c.scrut, env),
+        span: c.span,
         arms: c.arms.map((arm) => ({ pattern: arm.pattern, body: foldExpr(arm.body, env) })),
       };
     default: {
@@ -320,6 +345,13 @@ function dceExpr(e: AnfExpr): AnfExpr {
       if (!freeVars(cont).has(e.name)) return cont;
       return { tag: "letrec", name: e.name, param: e.param, body: dceExpr(e.body), cont };
     }
+    case "loop": {
+      const cont = dceExpr(e.cont);
+      if (!freeVars(cont).has(e.name)) return cont;
+      return { tag: "loop", name: e.name, params: e.params, body: dceExpr(e.body), cont };
+    }
+    case "jump":
+      return e;
     case "let": {
       const body = dceExpr(e.body);
       if (!freeVars(body).has(e.name) && isPure(e.value)) return body;
@@ -339,7 +371,12 @@ function dceCExp(c: CExp): CExp {
     case "if":
       return { tag: "if", cond: c.cond, then: dceExpr(c.then), else: dceExpr(c.else) };
     case "match":
-      return { tag: "match", scrut: c.scrut, arms: c.arms.map((arm) => ({ pattern: arm.pattern, body: dceExpr(arm.body) })) };
+      return {
+        tag: "match",
+        scrut: c.scrut,
+        span: c.span,
+        arms: c.arms.map((arm) => ({ pattern: arm.pattern, body: dceExpr(arm.body) })),
+      };
     default:
       return c;
   }
@@ -372,16 +409,135 @@ function isPure(c: CExp): boolean {
 function isPureExpr(e: AnfExpr): boolean {
   switch (e.tag) {
     case "halt":
+    case "jump":
       return true;
     case "let":
       return isPure(e.value) && isPureExpr(e.body);
     case "letrec":
+    case "loop":
       return isPureExpr(e.body) && isPureExpr(e.cont);
     default: {
       const _never: never = e;
       return _never;
     }
   }
+}
+
+/**
+ * Rewrite saturated self tail calls.
+ *
+ * `let rec f x y = ... f a b` is curried in ANF: `f` returns a lambda, and the
+ * call is the chain `let t1 = f(a) in let t2 = t1(b) in t2`. When that chain
+ * is the result of the innermost function (or of an `if` / `match` arm), it
+ * becomes `jump(a, b)` inside a multi-parameter `loop`. Calls that are not
+ * saturated, or whose result is used by another computation, stay ordinary
+ * applications, so partial application and non-tail recursion are unchanged.
+ */
+export function tailCallPass(expr: AnfExpr): AnfExpr {
+  return tcoExpr(expr);
+}
+
+function tcoExpr(e: AnfExpr): AnfExpr {
+  switch (e.tag) {
+    case "halt":
+    case "jump":
+      return e;
+    case "let":
+      return { ...e, value: tcoCExp(e.value), body: tcoExpr(e.body) };
+    case "letrec": {
+      const body = tcoExpr(e.body);
+      const cont = tcoExpr(e.cont);
+      const peeled = peelParams(body, [e.param]);
+      const rewritten = rewriteTail(peeled.inner, e.name, peeled.params.length);
+      if (!rewritten.jumped) return { ...e, body, cont };
+      return { tag: "loop", name: e.name, params: peeled.params, body: rewritten.expr, cont };
+    }
+    case "loop":
+      return { ...e, body: tcoExpr(e.body), cont: tcoExpr(e.cont) };
+    default: {
+      const _never: never = e;
+      return _never;
+    }
+  }
+}
+
+function tcoCExp(c: CExp): CExp {
+  switch (c.tag) {
+    case "fun":
+      return { ...c, body: tcoExpr(c.body) };
+    case "if":
+      return { ...c, then: tcoExpr(c.then), else: tcoExpr(c.else) };
+    case "match":
+      return { ...c, arms: c.arms.map((arm) => ({ ...arm, body: tcoExpr(arm.body) })) };
+    default:
+      return c;
+  }
+}
+
+function peelParams(body: AnfExpr, params: string[]): { params: string[]; inner: AnfExpr } {
+  if (
+    body.tag === "let" &&
+    body.value.tag === "fun" &&
+    body.body.tag === "halt" &&
+    body.body.atom.tag === "var" &&
+    body.body.atom.name === body.name
+  ) {
+    return peelParams(body.value.body, [...params, body.value.param]);
+  }
+  return { params, inner: body };
+}
+
+function rewriteTail(expr: AnfExpr, fname: string, arity: number): { expr: AnfExpr; jumped: boolean } {
+  const args = parseSaturated(expr, { tag: "var", name: fname }, arity, []);
+  if (args) return { expr: { tag: "jump", args }, jumped: true };
+  if (expr.tag === "let" && isResult(expr) && expr.value.tag === "if") {
+    const thenB = rewriteTail(expr.value.then, fname, arity);
+    const elseB = rewriteTail(expr.value.else, fname, arity);
+    return {
+      expr: { ...expr, value: { ...expr.value, then: thenB.expr, else: elseB.expr } },
+      jumped: thenB.jumped || elseB.jumped,
+    };
+  }
+  if (expr.tag === "let" && isResult(expr) && expr.value.tag === "match") {
+    let jumped = false;
+    const arms = expr.value.arms.map((arm) => {
+      const armB = rewriteTail(arm.body, fname, arity);
+      jumped = jumped || armB.jumped;
+      return { ...arm, body: armB.expr };
+    });
+    return { expr: { ...expr, value: { ...expr.value, arms } }, jumped };
+  }
+  if (expr.tag === "let") {
+    const body = rewriteTail(expr.body, fname, arity);
+    return { expr: { ...expr, body: body.expr }, jumped: body.jumped };
+  }
+  if (expr.tag === "letrec" || expr.tag === "loop") {
+    const cont = rewriteTail(expr.cont, fname, arity);
+    return { expr: { ...expr, cont: cont.expr }, jumped: cont.jumped };
+  }
+  return { expr, jumped: false };
+}
+
+function isResult(e: Extract<AnfExpr, { tag: "let" }>): boolean {
+  return e.body.tag === "halt" && e.body.atom.tag === "var" && e.body.atom.name === e.name;
+}
+
+function atomEq(a: Atom, b: Atom): boolean {
+  if (a.tag !== b.tag) return false;
+  if (a.tag === "var" && b.tag === "var") return a.name === b.name;
+  if (a.tag === "int" && b.tag === "int") return a.value === b.value;
+  if (a.tag === "bool" && b.tag === "bool") return a.value === b.value;
+  if (a.tag === "string" && b.tag === "string") return a.value === b.value;
+  return false;
+}
+
+/** A chain `f(a)(b)...` of exactly `need` applications whose final result is halted. */
+function parseSaturated(expr: AnfExpr, expectFn: Atom, need: number, acc: Atom[]): Atom[] | null {
+  if (need === 0) {
+    return expr.tag === "halt" && atomEq(expr.atom, expectFn) ? acc : null;
+  }
+  if (expr.tag !== "let" || expr.value.tag !== "app" || !atomEq(expr.value.fn, expectFn)) return null;
+  return parseSaturated(expr.body, { tag: "var", name: expr.name }, need - 1, [...acc, expr.value.arg]);
 }
 
 /** Debug helper so a failing IR test can show both sides without importing pp twice. */

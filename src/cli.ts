@@ -10,7 +10,8 @@
  *   --const-fold / --no-const-fold
  *   --dce        / --no-dce
  *   --inline     / --no-inline
- *   --opt all | none | const-fold,dce,inline
+ *   --tco        / --no-tco
+ *   --opt all | none | const-fold,dce,inline,tco
  *
  * Unknown options, extra file arguments, and `-o` on a command other than
  * `compile` are errors. A missing file is reported as a compiler error
@@ -43,7 +44,8 @@ Options:
   --const-fold, --no-const-fold     constant folding (default on)
   --dce, --no-dce                   dead code elimination (default on)
   --inline, --no-inline             inlining of once-used functions (default on)
-  --opt all|none|const-fold,dce,inline
+  --tco, --no-tco                   self tail-call optimization (default on)
+  --opt all|none|const-fold,dce,inline,tco
                                     replace the enabled set; later flags override
   -o, --out <file>                  JavaScript output for compile
 `;
@@ -96,6 +98,7 @@ function main(argv: string[]): void {
   const flags = flagsFromArgs(parsed.optArgs);
   if (parsed.command === "check") {
     const checked = compileSource(source, parsed.file, flags).checked;
+    reportWarnings(checked.warnings);
     for (const binding of checked.bindings.filter((b) => b.topLevel)) {
       process.stdout.write(`${binding.name} : ${binding.type}\n`);
     }
@@ -103,6 +106,7 @@ function main(argv: string[]): void {
     return;
   }
   const compiled = compileSource(source, parsed.file, flags);
+  reportWarnings(compiled.checked.warnings);
   if (parsed.command === "ir") {
     process.stdout.write(`${ppAnf(compiled.ir)}\n`);
     return;
@@ -131,6 +135,10 @@ try {
     process.stderr.write(`${message}\n`);
     process.exitCode = 1;
   }
+}
+
+function reportWarnings(warnings: string[]): void {
+  for (const warning of warnings) process.stderr.write(`${warning}\n`);
 }
 
 function readSource(filename: string): string {

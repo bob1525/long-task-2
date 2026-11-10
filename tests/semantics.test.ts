@@ -11,14 +11,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tsx = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 
 const sets: Array<[string, OptFlags]> = [
-  ["all", { constFold: true, dce: true, inline: true }],
-  ["none", { constFold: false, dce: false, inline: false }],
-  ["const-fold", { constFold: true, dce: false, inline: false }],
-  ["dce", { constFold: false, dce: true, inline: false }],
-  ["inline", { constFold: false, dce: false, inline: true }],
-  ["const-fold+dce", { constFold: true, dce: true, inline: false }],
-  ["inline+const-fold", { constFold: true, dce: false, inline: true }],
-  ["inline+dce", { constFold: false, dce: true, inline: true }],
+  ["all", { constFold: true, dce: true, inline: true, tco: true }],
+  ["none", { constFold: false, dce: false, inline: false, tco: false }],
+  ["const-fold", { constFold: true, dce: false, inline: false, tco: false }],
+  ["dce", { constFold: false, dce: true, inline: false, tco: false }],
+  ["inline", { constFold: false, dce: false, inline: true, tco: false }],
+  ["tco", { constFold: false, dce: false, inline: false, tco: true }],
+  ["const-fold+dce", { constFold: true, dce: true, inline: false, tco: false }],
+  ["inline+const-fold", { constFold: true, dce: false, inline: true, tco: false }],
+  ["inline+dce", { constFold: false, dce: true, inline: true, tco: false }],
 ];
 
 function agree(src: string, expected: string): void {
@@ -54,35 +55,40 @@ test("a constant if and short-circuit operators drop the untaken branch", () => 
   agree(`${loop}let main = false && loop 1`, "false");
 });
 
-test("an unused diverging call is still executed with every flag combination", () => {
+test("an unused diverging call is still executed when tail calls stay recursive", () => {
   const src = "let rec loop x = loop x\nlet unused = loop 1\nlet main = 2";
-  for (const [name, flags] of sets) {
+  // Tail-call optimization turns this into a real infinite loop. With it off,
+  // the call must still run: dead-code elimination does not delete it.
+  for (const [name, flags] of sets.filter(([, flags]) => !flags.tco)) {
     const result = executeJs(compileSource(src, "t.fun", flags).js, 2000);
     assert.equal(result.timedOut, false, name);
     assert.notEqual(result.status, 0, name);
     assert.notEqual(result.stdout.trim(), "2", name);
-    assert.match(result.stderr, /Maximum call stack size exceeded/, name);
+    assert.match(result.stderr.trim(), /^runtime error: stack overflow$/, name);
+    assert.doesNotMatch(result.stderr, /prog\.js/, name);
   }
 });
 
 test("division by zero fails with and without constant folding", () => {
   const src = "let main = 1 / 0";
   for (const flags of [
-    { constFold: true, dce: true, inline: true },
-    { constFold: false, dce: false, inline: false },
-    { constFold: true, dce: false, inline: false },
+    { constFold: true, dce: true, inline: true, tco: true },
+    { constFold: false, dce: false, inline: false, tco: false },
+    { constFold: true, dce: false, inline: false, tco: false },
   ] as const) {
     const result = executeJs(compileSource(src, "t.fun", flags).js);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /division by zero/);
+    assert.match(result.stderr, /^runtime error: division by zero at /);
+    assert.doesNotMatch(result.stderr, /prog\.js/);
   }
 });
 
 test("a non-exhaustive match fails at run time", () => {
   const src = "type T = A | B\nlet main = match A with | B -> 1";
-  const result = executeJs(compileSource(src, "t.fun", { constFold: false, dce: false, inline: false }).js);
+  const result = executeJs(compileSource(src, "t.fun", { constFold: false, dce: false, inline: false, tco: false }).js);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /non-exhaustive pattern match/);
+  assert.match(result.stderr.trim(), /^runtime error: non-exhaustive pattern match at t\.fun:\d+:\d+$/);
+  assert.doesNotMatch(result.stderr, /prog\.js/);
 });
 
 test("shadowing and closure capture agree with and without optimization", () => {

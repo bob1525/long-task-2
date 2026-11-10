@@ -33,7 +33,7 @@ export function compileSource(source: string, filename = "<input>", flags: OptFl
   const checked = inferProgram(source, filename);
   const anf = toAnf(checked.expr, checked.ctors);
   const ir = optimize(anf, flags);
-  const js = codegen(ir);
+  const js = codegen(ir, filename);
   return { checked, anf, ir, js };
 }
 
@@ -80,17 +80,19 @@ export function runSource(source: string, filename = "<input>", flags: OptFlags 
   return result.stdout.replace(/\n$/, "");
 }
 
-const OPT_NAMES = new Set(["const-fold", "dce", "inline", "all", "none"]);
+const OPT_NAMES = new Set(["const-fold", "dce", "inline", "tco", "all", "none"]);
 
 /**
  * Interpret optimization flags.
  *
  * Defaults are all on. `--opt` replaces the enabled set (`all`, `none`, or a
- * comma-separated list). Later individual flags override that set, so
- * `--opt none --const-fold` enables only constant folding.
+ * comma-separated list). `all` and `none` include tail-call optimization.
+ * Later individual flags override that set, so `--opt none --const-fold`
+ * enables only constant folding, and `--opt all --no-tco` enables every pass
+ * except tail calls.
  */
 export function flagsFromArgs(args: string[]): OptFlags {
-  const opts: OptFlags = { constFold: true, dce: true, inline: true };
+  const opts: OptFlags = { constFold: true, dce: true, inline: true, tco: true };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--const-fold") opts.constFold = true;
@@ -99,6 +101,8 @@ export function flagsFromArgs(args: string[]): OptFlags {
     else if (arg === "--no-dce") opts.dce = false;
     else if (arg === "--inline") opts.inline = true;
     else if (arg === "--no-inline") opts.inline = false;
+    else if (arg === "--tco") opts.tco = true;
+    else if (arg === "--no-tco") opts.tco = false;
     else if (arg === "--opt" || arg.startsWith("--opt=")) {
       const value = arg === "--opt" ? args[++i] : arg.slice("--opt=".length);
       if (!value) {
@@ -120,7 +124,7 @@ function applyOptList(opts: OptFlags, value: string): void {
   for (const part of parts) {
     if (!OPT_NAMES.has(part)) {
       throw new CompileError(
-        `unknown optimization '${part}' (expected const-fold, dce, inline, all, or none)`,
+        `unknown optimization '${part}' (expected const-fold, dce, inline, tco, all, or none)`,
         undefined,
         "<cli>",
         "compile",
@@ -131,23 +135,27 @@ function applyOptList(opts: OptFlags, value: string): void {
     opts.constFold = true;
     opts.dce = true;
     opts.inline = true;
+    opts.tco = true;
     return;
   }
   if (parts.length === 1 && parts[0] === "none") {
     opts.constFold = false;
     opts.dce = false;
     opts.inline = false;
+    opts.tco = false;
     return;
   }
   if (parts.includes("all") || parts.includes("none")) {
-    throw new CompileError("use 'all' or 'none' alone, or list const-fold, dce, and inline", undefined, "<cli>", "compile");
+    throw new CompileError("use 'all' or 'none' alone, or list const-fold, dce, inline, and tco", undefined, "<cli>", "compile");
   }
   opts.constFold = false;
   opts.dce = false;
   opts.inline = false;
+  opts.tco = false;
   for (const part of parts) {
     if (part === "const-fold") opts.constFold = true;
     if (part === "dce") opts.dce = true;
     if (part === "inline") opts.inline = true;
+    if (part === "tco") opts.tco = true;
   }
 }

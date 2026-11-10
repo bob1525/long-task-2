@@ -10,9 +10,16 @@
  * Names are globally unique after ANF conversion. Optimizations can substitute
  * atoms and move `let` bindings without capture. That is the reason inlining
  * and constant folding are written as local tree rewrites.
+ *
+ * `loop` is a curried self-recursive function whose saturated tail calls were
+ * rewritten to `jump`. Codegen copies the arguments into locals and runs the
+ * body in a `while` loop, so a tail-recursive loop does not grow the stack.
+ * `span` on a primitive or a match is the source position reported if that
+ * computation fails at run time.
  */
 
 import { formatPattern, type Pattern, type PrimOp } from "./ast.js";
+import type { Span } from "./errors.js";
 
 export type Atom =
   | { tag: "var"; name: string }
@@ -22,12 +29,12 @@ export type Atom =
 
 export type CExp =
   | { tag: "atom"; atom: Atom }
-  | { tag: "prim"; op: PrimOp; args: Atom[] }
+  | { tag: "prim"; op: PrimOp; args: Atom[]; span?: Span }
   | { tag: "app"; fn: Atom; arg: Atom }
   | { tag: "ctor"; name: string; args: Atom[] }
   | { tag: "fun"; param: string; body: AnfExpr }
   | { tag: "if"; cond: Atom; then: AnfExpr; else: AnfExpr }
-  | { tag: "match"; scrut: Atom; arms: AnfArm[] };
+  | { tag: "match"; scrut: Atom; arms: AnfArm[]; span?: Span };
 
 export interface AnfArm {
   pattern: Pattern;
@@ -36,8 +43,10 @@ export interface AnfArm {
 
 export type AnfExpr =
   | { tag: "halt"; atom: Atom }
+  | { tag: "jump"; args: Atom[] }
   | { tag: "let"; name: string; value: CExp; body: AnfExpr }
-  | { tag: "letrec"; name: string; param: string; body: AnfExpr; cont: AnfExpr };
+  | { tag: "letrec"; name: string; param: string; body: AnfExpr; cont: AnfExpr }
+  | { tag: "loop"; name: string; params: string[]; body: AnfExpr; cont: AnfExpr };
 
 export function ppAtom(a: Atom): string {
   switch (a.tag) {
@@ -76,6 +85,10 @@ function ppExpr(e: AnfExpr, ind: number): string {
     }
     case "letrec":
       return `${pad(ind)}let rec ${e.name} = fun ${e.param} ->\n${ppExpr(e.body, ind + 1)}\n${pad(ind)}in\n${ppExpr(e.cont, ind)}`;
+    case "loop":
+      return `${pad(ind)}let rec ${e.name}(${e.params.join(", ")}) =\n${ppExpr(e.body, ind + 1)}\n${pad(ind)}in\n${ppExpr(e.cont, ind)}`;
+    case "jump":
+      return `${pad(ind)}jump(${e.args.map(ppAtom).join(", ")})`;
     default: {
       const _never: never = e;
       return _never;
@@ -127,6 +140,10 @@ export function spliceTail(branch: AnfExpr, resultName: string, cont: AnfExpr): 
       };
     case "letrec":
       return { ...branch, cont: spliceTail(branch.cont, resultName, cont) };
+    case "loop":
+      return { ...branch, cont: spliceTail(branch.cont, resultName, cont) };
+    case "jump":
+      return branch;
     default: {
       const _never: never = branch;
       return _never;
@@ -156,6 +173,18 @@ export function substExpr(e: AnfExpr, name: string, rep: Atom): AnfExpr {
         cont: e.name === name ? e.cont : substExpr(e.cont, name, rep),
       };
     }
+    case "loop": {
+      const bodyShadow = e.name === name || e.params.includes(name);
+      return {
+        tag: "loop",
+        name: e.name,
+        params: e.params,
+        body: bodyShadow ? e.body : substExpr(e.body, name, rep),
+        cont: e.name === name ? e.cont : substExpr(e.cont, name, rep),
+      };
+    }
+    case "jump":
+      return { tag: "jump", args: e.args.map((a) => substAtom(a, name, rep)) };
     default: {
       const _never: never = e;
       return _never;
@@ -168,7 +197,7 @@ function substCExp(c: CExp, name: string, rep: Atom): CExp {
     case "atom":
       return { tag: "atom", atom: substAtom(c.atom, name, rep) };
     case "prim":
-      return { tag: "prim", op: c.op, args: c.args.map((a) => substAtom(a, name, rep)) };
+      return { tag: "prim", op: c.op, args: c.args.map((a) => substAtom(a, name, rep)), span: c.span };
     case "app":
       return { tag: "app", fn: substAtom(c.fn, name, rep), arg: substAtom(c.arg, name, rep) };
     case "ctor":
@@ -186,6 +215,7 @@ function substCExp(c: CExp, name: string, rep: Atom): CExp {
       return {
         tag: "match",
         scrut: substAtom(c.scrut, name, rep),
+        span: c.span,
         arms: c.arms.map((arm) => ({
           pattern: arm.pattern,
           body: patternBinds(arm.pattern).has(name) ? arm.body : substExpr(arm.body, name, rep),
@@ -232,6 +262,17 @@ export function freeVars(e: AnfExpr): Set<string> {
       for (const name of body) free.add(name);
       return free;
     }
+    case "loop": {
+      const free = freeVars(e.cont);
+      free.delete(e.name);
+      const body = freeVars(e.body);
+      body.delete(e.name);
+      for (const param of e.params) body.delete(param);
+      for (const name of body) free.add(name);
+      return free;
+    }
+    case "jump":
+      return unionAtoms(e.args);
     default: {
       const _never: never = e;
       return _never;
@@ -301,6 +342,13 @@ export function countUses(e: AnfExpr, name: string): number {
       const inCont = e.name === name ? 0 : countUses(e.cont, name);
       return inBody + inCont;
     }
+    case "loop": {
+      const inBody = e.name === name || e.params.includes(name) ? 0 : countUses(e.body, name);
+      const inCont = e.name === name ? 0 : countUses(e.cont, name);
+      return inBody + inCont;
+    }
+    case "jump":
+      return e.args.reduce((n, a) => n + atomUses(a, name), 0);
     default: {
       const _never: never = e;
       return _never;
@@ -346,6 +394,10 @@ export function countLets(e: AnfExpr): number {
       return 1 + countLetsC(e.value) + countLets(e.body);
     case "letrec":
       return 1 + countLets(e.body) + countLets(e.cont);
+    case "loop":
+      return 1 + countLets(e.body) + countLets(e.cont);
+    case "jump":
+      return 0;
     default: {
       const _never: never = e;
       return _never;

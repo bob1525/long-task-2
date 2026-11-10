@@ -23,7 +23,8 @@
  * generalized, including ones whose right-hand side is not a syntactic value.
  */
 
-import type { Expr, Program, TypeExpr } from "./ast.js";
+import type { Expr, Pattern, Program, TypeExpr } from "./ast.js";
+import { missingPattern, type ExType, type ExVariant } from "./exhaust.js";
 import { parse } from "./parser.js";
 import { CompileError, type Span } from "./errors.js";
 
@@ -67,6 +68,8 @@ export interface CheckedProgram {
   resultName: string;
   result: string;
   ctors: { name: string; arity: number }[];
+  /** Non-exhaustive matches. They do not fail type checking. */
+  warnings: string[];
 }
 
 const BUILTIN_ARITY: Record<string, number> = { Int: 0, Bool: 0, String: 0 };
@@ -100,6 +103,9 @@ class Checker {
   private currentLevel = 0;
   private readonly ctors = new Map<string, CtorInfo>();
   private readonly typeArity = new Map<string, number>(Object.entries(BUILTIN_ARITY));
+  private readonly variantNames = new Map<string, string[]>();
+  private readonly warnings: string[] = [];
+  private exTable: Map<string, ExVariant[]> | null = null;
 
   constructor(private readonly filename: string) {}
 
@@ -147,6 +153,7 @@ class Checker {
       resultName,
       result: resultBinding?.type ?? "?",
       ctors: [...this.ctors.entries()].map(([name, info]) => ({ name, arity: info.arity })),
+      warnings: this.warnings,
     };
   }
 
@@ -167,6 +174,10 @@ class Checker {
         params.add(p);
       }
       this.typeArity.set(decl.name, decl.params.length);
+      this.variantNames.set(
+        decl.name,
+        decl.variants.map((variant) => variant.name),
+      );
     }
     for (const decl of decls) {
       const paramVars = new Map<string, TVar>();
@@ -377,7 +388,55 @@ class Checker {
         );
       }
     }
+    this.warnIfNonExhaustive(e.span, scrut, e.arms.map((arm) => arm.pattern));
     return result;
+  }
+
+  private warnIfNonExhaustive(span: Span, scrut: Type, pats: Pattern[]): void {
+    const hole = missingPattern(this.toEx(scrut), pats, this.variantTable());
+    if (!hole) return;
+    const { line, col } = span.start;
+    this.warnings.push(
+      `${this.filename}:${line}:${col}: warning: non-exhaustive pattern match; missing ${hole}`,
+    );
+  }
+
+  private variantTable(): Map<string, ExVariant[]> {
+    if (this.exTable) return this.exTable;
+    const table = new Map<string, ExVariant[]>();
+    for (const [typeName, names] of this.variantNames) {
+      table.set(
+        typeName,
+        names.map((name) => {
+          const peeled = this.peelCtor(name);
+          return { name, fields: peeled ? peeled.fields.map((field) => this.toEx(field)) : [] };
+        }),
+      );
+    }
+    this.exTable = table;
+    return table;
+  }
+
+  private peelCtor(name: string): { fields: Type[] } | null {
+    const info = this.ctors.get(name);
+    if (!info) return null;
+    let ty = this.instantiate(info.scheme);
+    const fields: Type[] = [];
+    for (let i = 0; i < info.arity; i++) {
+      const fun = prune(ty);
+      if (fun.kind !== "fun") return null;
+      fields.push(fun.arg);
+      ty = fun.ret;
+    }
+    return { fields };
+  }
+
+  private toEx(t: Type): ExType {
+    const p = prune(t);
+    if (p.kind !== "con") return { k: "open" };
+    if (p.name === "Bool") return { k: "bool" };
+    if (this.variantNames.has(p.name)) return { k: "adt", name: p.name };
+    return { k: "open" };
   }
 
   private inferPat(p: import("./ast.js").Pattern, expected: Type, env: Env): Env {

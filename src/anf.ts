@@ -99,7 +99,7 @@ function anf(e: Expr, k: Kont, scope: Scope, supply: Supply, arity: Map<string, 
         e.args,
         (args) => {
           const name = supply.fresh("t");
-          return bind(name, { tag: "prim", op: e.op, args }, k({ tag: "var", name }));
+          return bind(name, { tag: "prim", op: e.op, args, span: e.span }, k({ tag: "var", name }));
         },
         scope,
         supply,
@@ -188,7 +188,7 @@ function anf(e: Expr, k: Kont, scope: Scope, supply: Supply, arity: Map<string, 
             return { pattern: renamed.pattern, body: anf(arm.body, halt, renamed.scope, supply, arity) };
           });
           const name = supply.fresh("t");
-          return bind(name, { tag: "match", scrut, arms }, k({ tag: "var", name }));
+          return bind(name, { tag: "match", scrut, arms, span: e.span }, k({ tag: "var", name }));
         },
         scope,
         supply,
