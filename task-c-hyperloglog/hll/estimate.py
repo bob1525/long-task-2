@@ -110,10 +110,14 @@ def apply_corrections(raw: float, empty: int, m: int) -> tuple[float, str]:
     else:
         # Section 4 (iii): E estimates the number of distinct hashes, about
         # 2^L (1 - e^{-n/2^L}). Inverting that exponential uses the natural
-        # logarithm, the same ``log`` as the rest of the paper. log2 would
-        # scale the cardinality by 1/ln 2.
+        # logarithm. The model requires E < 2^L. As E approaches 2^L from
+        # below the implied cardinality diverges, so a raw overshoot — reachable
+        # when every register holds ρ(0^{32-b}) = 33 - b — follows that limit.
         ratio = raw / HASH_SPACE
-        value = -HASH_SPACE * math.log(1.0 - ratio)
+        if ratio >= 1.0:
+            value = math.inf
+        else:
+            value = -HASH_SPACE * math.log(1.0 - ratio)
         regime = "large"
     return value, regime
 

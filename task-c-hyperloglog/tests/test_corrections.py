@@ -133,6 +133,17 @@ class CorrectionTests(unittest.TestCase):
         self.assertEqual(estimate.regime, "large")
         self.assertTrue(math.isinf(estimate.value) and estimate.value > 0)
 
+    def test_zero_remainder_in_every_bucket_is_a_reachable_pole(self):
+        # The same vector produced by the hash split, not by writing registers directly.
+        # index << 28 puts that index in the leading 4 bits and zeros in w.
+        sketch = HyperLogLog(4)
+        for index in range(16):
+            sketch.add_hash(index << 28)
+        self.assertEqual(sketch.registers, tuple(29 for _ in range(16)))
+        estimate = sketch.estimate()
+        self.assertEqual(estimate.regime, "large")
+        self.assertTrue(math.isinf(estimate.value) and estimate.value > 0)
+
     def test_an_untouched_register_does_not_zero_the_estimate(self):
         # Section 4 (i): initializing at −∞ would force E = 0 as soon as any
         # substream is empty. The program initializes at 0, so one zero register
