@@ -109,6 +109,41 @@ class RaftTest(unittest.TestCase):
         self.assertEqual(cluster.nodes[follower].kv.get("k"), "next")
         self.assertTrue(cluster.verify().passed, cluster.verify())
 
+    def test_lost_read_index_heartbeat_is_retried(self) -> None:
+        cluster = support.raft(
+            3,
+            seed=2,
+            heartbeat=30,
+            election_min=200,
+            election_max=280,
+            client_timeout=500,
+            rpc_slice=500,
+            delay_max=2,
+        )
+        client = cluster.client("c")
+        self.assertTrue(client.put("k", "v").ok)
+        leader = cluster.leader_id()
+        self.assertIsNotNone(leader)
+        state = {"left": 2}
+
+        def filt(src: int, dst: int, msg: dict) -> bool:
+            if (
+                msg.get("type") == "AppendEntries"
+                and msg.get("token") is not None
+                and src == leader
+                and state["left"] > 0
+            ):
+                state["left"] -= 1
+                return True
+            return False
+
+        cluster.net.filter = filt
+        got = client.get("k", contact=leader, timeout=500)
+        self.assertEqual(state["left"], 0)
+        self.assertEqual(got.status, "ok", cluster.debug_state())
+        self.assertEqual(got.value, "v")
+        self.assertEqual(cluster.nodes[leader].role, "leader")
+
     def test_two_handles_with_the_same_client_name_do_not_collapse_writes(self) -> None:
         cluster = support.raft(3, seed=1)
         first = cluster.client("c")

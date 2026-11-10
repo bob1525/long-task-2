@@ -158,7 +158,7 @@ class RaftNode:
         def fire() -> None:
             if not self.alive or gen != self.hb_gen or self.role != "leader":
                 return
-            self._replicate_all(token=None)
+            self._replicate_all()
             self.sim.schedule(interval, fire, label=f"hb-{self.id}")
 
         self.sim.schedule(interval, fire, label=f"hb-{self.id}")
@@ -221,7 +221,7 @@ class RaftNode:
         self.log.append(LogEntry(self.current_term, None, None, None))
         self.election_gen += 1
         trace(self.sim.time, f"n{self.id} leader term={self.current_term} noop={noop_index}")
-        self._replicate_all(token=None)
+        self._replicate_all()
         self._advance_commit()
         self._arm_heartbeat()
 
@@ -275,12 +275,12 @@ class RaftNode:
                 if index <= self.commit_index:
                     self._reply_put(entry)
                 else:
-                    self._replicate_all(token=None)
+                    self._replicate_all()
                 return
         self.log.append(LogEntry(self.current_term, msg["key"], msg["value"], req_id))
         self.pending_client[req_id] = msg["rpc_id"]
         trace(self.sim.time, f"n{self.id} append {msg['key']}={msg['value']} index={self.last_index()}")
-        self._replicate_all(token=None)
+        self._replicate_all()
         self._advance_commit()
 
     def _client_get(self, msg: dict) -> None:
@@ -292,7 +292,7 @@ class RaftNode:
             return
         if not self._committed_current_term():
             self.read_queue.append(msg)
-            self._replicate_all(token=None)
+            self._replicate_all()
             return
         self._begin_read(msg)
 
@@ -312,16 +312,38 @@ class RaftNode:
                 "term": self.current_term,
             }
         )
-        self._replicate_all(token=token)
+        self._replicate_all()
         self._check_reads()
 
-    def _replicate_all(self, token: int | None) -> None:
+    def _outbound_read_token(self) -> int | None:
+        """Highest read token that still needs a quorum in this term.
+
+        Heartbeats and retries echo this token. A successful reply then counts
+        for every pending read that had already started when the message was
+        sent. A reply cannot satisfy a read started after that send, because
+        that read holds a larger token.
+        """
+
+        tokens = [pending["token"] for pending in self.pending_reads if pending["term"] == self.current_term]
+        if not tokens:
+            return None
+        return max(tokens)
+
+    def _note_read_ack(self, src: int, token: int | None) -> None:
+        if token is None:
+            return
+        for pending in self.pending_reads:
+            if pending["term"] == self.current_term and pending["token"] <= token:
+                self.read_acks.setdefault(pending["token"], set()).add(src)
+
+    def _replicate_all(self) -> None:
         if self.role != "leader" or not self.alive:
             return
         for peer in self.peers:
-            self._replicate_to(peer, token)
+            self._replicate_to(peer)
 
-    def _replicate_to(self, peer: int, token: int | None) -> None:
+    def _replicate_to(self, peer: int) -> None:
+        token = self._outbound_read_token()
         next_index = self.next_index.get(peer, self.last_index() + 1)
         if next_index < 1:
             next_index = 1
@@ -443,9 +465,7 @@ class RaftNode:
             if match_index > self.match_index.get(src, 0):
                 self.match_index[src] = match_index
             self.next_index[src] = max(self.next_index.get(src, 1), self.match_index[src] + 1)
-            token = msg.get("token")
-            if token is not None:
-                self.read_acks.setdefault(token, set()).add(src)
+            self._note_read_ack(src, msg.get("token"))
             self._advance_commit()
             self._check_reads()
             return
@@ -471,7 +491,7 @@ class RaftNode:
         if new_next >= self.next_index.get(src, 1):
             new_next = max(1, self.next_index.get(src, 1) - 1)
         self.next_index[src] = new_next
-        self._replicate_to(src, token=None)
+        self._replicate_to(src)
 
     def _advance_commit(self) -> None:
         if self.role != "leader":
